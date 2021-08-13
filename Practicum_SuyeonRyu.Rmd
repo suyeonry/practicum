@@ -1,0 +1,1068 @@
+---
+title: "Final Report"
+author: "Sue Suyeon Ryu_6688267696"
+output:
+  html_document:
+    toc : true
+    toc_float : true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Introduction / Research Question / Problem Statement
+
+California Teachers Study (CTS) has been collaborating with Office of Statewide Health Planning and Development (OSHPD) to obtain years of patient information from the admission questionaires to the outcome of the patients. In this data analytic report, the aims are 
+1. to develop a prediction model for the probability of death with stratified time windows (30, 60, 90, 150, and longer than 150 days)
+2. To analyze whether the specific time windows after hospitalization is responsible to the decease outcome of patients 
+3. to analyze whether certain phenotypes of comorbities are more responsible to the decease outcome of patients than the others 
+4. to find temporal or spatial trends among the deceased patients, by utilizing regressional models with machine learning (ML) skills. 
+
+
+
+---------------------------------------------------
+
+# Data collection / measurements 
+
+The analyzed data sources are provided by the California Teachers Study (CTS). Specifically the OSHPD hospitalization records data set with 132538 patient input were used. In this analysis only the records of CTS participants from 2000 to 2015 were used in analysis. 
+
+
+
+
+---------------------------------------------------
+
+
+
+# Methods 
+
+To develop a prediction model for the probability of death with stratified time windows (30, 60, 90, 150, and longer than 150 days), tree-based recursive partitioning classification models were built by ML. Each data set were divided into training set and testing set, which were used to develop the model and to evaluate the performances of model, respectively. Each model's variable importance were plotted, then mis-classification error or accuracy were assessed with the interpretations of the outcomes.
+
+As for the comorbidities, the publicly known Charlson Comorbidity Index (CCI) was reflected and calculated on dataset provided, filtered for the observations with full diagnoses primary to quinary. Once each observation's CCI was obtained, logistic calculations with the deceased outcome is completed. 
+
+Due to the significance of the spatial information in relation to the mortality rates, Provided zip code information of patients' residential area and publicly available socioeconomic status were paired to assess the spatial relations with the patients mortality rates. 
+
+
+---------------------------------------------------
+
+
+
+
+# Loading the data / EDA / Data Clean-up and Optimization
+
+
+```{r, include=FALSE}
+##########################
+#### USC Data Science ####
+##########################
+
+library(dplyr)
+
+params <- c("S:/Researcher Projects/Self Service Analysis Projects/10017_USCDAT/Suyeon Ryu/",
+            "O:/Datasets/10017_USCDAT/v01/10017_USCDAT_v01_20210609_2220_formats.csv",
+            "O:/Datasets/10017_USCDAT/v01/10017_USCDAT_v01_20210609_2220_analytic_data.csv",
+            "O:/Datasets/10017_USCDAT/uscdat_oshpd_formats.csv",
+            "O:/Datasets/10017_USCDAT/uscdat_oshpd.csv")
+
+
+setwd(params[1])
+
+# reading in data types for survey data
+data_types_file <- read.csv(file = params[2],  
+                            na.strings = "",                    
+                            colClasses = "character")  
+
+# reading in data types for hospitalization data
+oshpd_data_types_file <- read.csv(file = params[4],  
+                                  na.strings = "",                    
+                                  colClasses = "character")  
+
+# creating a named character vector to use in assigning character and Date types for survey data
+data_types <- data_types_file[, 2]             
+names(data_types) <- data_types_file[, 1]  
+data_types <- data_types[data_types=="character" | data_types=="Date"]     
+
+# creating a named character vector to use in assigning Date types for hospitalization data
+oshpd_data_types <- oshpd_data_types_file[, 2]             
+names(oshpd_data_types) <- oshpd_data_types_file[, 1]  
+oshpd_data_types <- oshpd_data_types[oshpd_data_types=="Date"] 
+
+# reading in survey data and assigning data types
+analytic_data <- read.csv(file = params[3],
+                          na.strings = "",
+                          colClasses = data_types)
+
+# reading in hospitalization data file 
+oshpd_data <- read.csv(file = params[5], 
+                       na.strings = "")
+
+# converting date fields
+oshpd_data[names(oshpd_data_types)] <- lapply(oshpd_data[names(oshpd_data_types)], as.Date, "%m/%d/%Y")
+
+# dropping columns that already exist in analytic_data
+oshpd_data[c("date_of_birth_dt", "date_of_death_dt", "cause_of_death_cde", "cause_of_death_dsc", 
+             "qnr_1_fill_dt", "qnr_2_fill_dt", "ses_quartile_ind", "first_moveout_ca_dt")] <- list(NULL)
+
+# joining survey data and hospitalization data on participant_key
+combined_data <- inner_join(analytic_data, oshpd_data) # n = 132538
+dim(combined_data) #132538 164
+
+
+```
+
+
+
+The available data were stratified based on the length of the stay in hospital, as finding potential patterns and relations between the duration of stay and the decease outcome is the main question that is addressed in this report. 
+
+```{r, cache=TRUE, include = FALSE}
+dat = combined_data
+range(dat$length_of_stay_day_cnt) # 0 1792
+# 30days 60 days 90days 150days higher
+
+
+dat$staytier = ifelse(dat$length_of_stay_day_cnt >=150, 5,{
+  ifelse (dat$length_of_stay_day_cnt >= 90,4,{
+    ifelse(dat$length_of_stay_day_cnt >= 60,3,{
+      ifelse (dat$length_of_stay_day_cnt >=30,2,1)
+    })
+  })
+} )
+
+    
+unique(dat$staytier)
+stay_tier_table = table(dat$staytier); stay_tier_table
+# 1     2    3   4  5 
+#131393 940 119 51 35
+stay_tier_table = as.data.frame(stay_tier_table); stay_tier_table
+row.names(stay_tier_table) = c("<30 days","30-59","60-89","90-149",">150 days");stay_tier_table
+colnames(stay_tier_table) = c("Staytier Var","Number of Patients")
+stay_tier_table 
+
+
+library(knitr)
+stay_tier_table_kable = kable(stay_tier_table, caption = "Cases per Days Stayed", "simple", align="cc")
+```
+
+
+```{r, cache=TRUE, include = TRUE}
+(stay_tier_table_kable)
+```
+
+
+```{r, cache=TRUE, include = FALSE}
+#to calculate prob separately for each tier, the data set were separated per tier
+tier1 = dat[dat$staytier == 1,]; #dim(tier1) #131393 165
+tier2 = dat[dat$staytier == 2,]; #dim(tier2) #940 165 
+tier3 = dat[dat$staytier == 3,]; #dim(tier3) #119 165
+tier4 = dat[dat$staytier == 4,]; #dim(tier4) #51 165
+tier5 = dat[dat$staytier == 5,]; #dim(tier5)# 35 165
+
+```
+
+
+
+The main outcome variable of interest, the deceased status, was visualized by stratification of days stayed at the hospital. The rate of decease increases as the days of stay prolonged. 
+
+```{r, include = FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+tier1_perc = as.data.frame(table(tier1$deceased)); tier1_perc
+tier2_perc = as.data.frame(table(tier2$deceased)); tier2_perc
+tier3_perc = as.data.frame(table(tier3$deceased)); tier3_perc
+tier4_perc = as.data.frame(table(tier4$deceased)); tier4_perc
+tier5_perc = as.data.frame(table(tier5$deceased)); tier5_perc
+perctable=t(cbind(tier1_perc[,2], tier2_perc[,2], tier3_perc[,2], tier4_perc[,2], tier5_perc[,2]))
+perctable = as.data.frame(perctable)
+perctable
+colnames(perctable) = c("alive","deceased")
+
+datm = (perctable) %>% 
+  mutate(ind = factor(row_number())) %>%
+  gather(deceased, proportion, -ind)
+```
+
+
+```{r, eval = TRUE, cache = TRUE, include = TRUE}
+p = ggplot(datm, aes(x = ind, y = proportion, fill = deceased)) + 
+  geom_col ( position = "fill", colour = "black") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_brewer(palette = "Dark2") 
+
+p + ggtitle("Proportion of Death Outcome Depending on Duration of Stay in Hospital")+
+  xlab ("Stay Tier") + ylab("Proportion (%)") 
+
+```
+
+
+
+
+
+```{r, cache=TRUE, include = FALSE}
+col_names = names(tier1) ; 
+tier1[,col_names] = lapply(tier1[,col_names],factor)
+tier2[,col_names] = lapply(tier2[,col_names],factor)
+tier3[,col_names] = lapply(tier3[,col_names],factor)
+tier4[,col_names] = lapply(tier4[,col_names],factor)
+tier5[,col_names] = lapply(tier5[,col_names],factor)
+#str(tier1) ; confirmed everything is in factor now
+```
+
+
+
+Feature selections were manually done to exclude any redundantly available features. For example, if the diagnosis codes are available the description of each code were omitted from the data set as it may raise concerns for confounding. The machine learning feature selection was attempted, due to the allowed memory and server capacity it was failed. After manual selection, total 89 variables were left to proceed. 
+
+```{r, cache=TRUE, include = FALSE, echo = FALSE}
+label_1 = read.csv("S:/Researcher Projects/Self Service Analysis Projects/10017_USCDAT/Suyeon Ryu/obj1_features.txt",header = TRUE)
+
+
+## features are manually selected excluding redundantly available features
+
+tier1_selected = tier1[label_1$id] ; dim(tier1_selected) # 131393 89
+tier2_selected = tier2[label_1$id] ; dim(tier2_selected) # 940 89
+tier3_selected = tier3[label_1$id] ; dim(tier3_selected) # 119 89
+tier4_selected = tier4[label_1$id] ; dim(tier4_selected) # 51 89
+tier5_selected = tier5[label_1$id] ; dim(tier5_selected) # 35 89
+
+
+
+```
+
+
+---------------------------------------------------
+
+
+
+
+# Model Development and Performance Metrics
+To develop the best fitting model, either through regression or machine learning, that predicts the probability of death within a certain time window(ex.30 days, 180days, etc) based on patient-specific baseline and hospitalization characteristics. 
+
+
+```{r, cache=TRUE, include = FALSE, echo = FALSE}
+
+n = nrow(tier1_selected)
+ntrain = floor(0.7*n)
+ntest = floor(0.3*n)
+
+set.seed(1234)
+split = sample(rep(1:2, times=c(ntrain, ntest)))
+
+#split the data 
+t1_train = tier1_selected[split==1,] 
+t1_test = tier1_selected[split==2,] 
+#dim(t1_train);dim(t1_test) #91975 89 ; 39418 89
+
+
+
+```
+
+
+
+
+
+```{r, cache=TRUE, include=FALSE}
+library(rpart)
+t1_rpart = rpart(t1_train$deceased ~ ., data = t1_train, method = "class", control = list(minsplit=20, minbucket = 7, cp=0))
+printcp(t1_rpart)
+plotcp(t1_rpart) #check lowest xrelerror
+t1_rpart$cptable[which.min(t1_rpart$cptable[,"xerror"])] #0.0000112
+```
+
+```{r, cache=TRUE,results = 'hide', include = FALSE}
+t1_treepruned = prune(t1_rpart, cp=0.0000112)
+library(rpart.plot)
+t1_varimp = round(summary(t1_treepruned)$variable.importance,2)
+```
+
+
+
+
+---------------------------------------------------
+
+
+
+## Results | Variable Importances {.tabset}
+
+### 1 : < 30 days {.tabset}
+```{r, cache=TRUE,eval=TRUE, include = TRUE}
+barplot(t1_varimp[1:10], col = "darkblue", horiz = TRUE, las=2, cex.names=0.5,main = "Var. Importance for Death Among Patients with Stay Less than 30 days")
+
+```
+For the patients who stayed less than 30 days at the hospital, it is apparent that the total amount of hospital charges (total_charges_amt) is directly related to the decease outcome. In addition, the ranked important variables are shown in the plot above. 
+
+```{r, cache=TRUE, include = FALSE}
+library(caret)
+t1_pred = predict(t1_treepruned, t1_test, type = "class")
+a = data.frame(t1_test$deceased, t1_pred)
+```
+
+
+```{r, cache=TRUE, include = TRUE}
+
+confusionMatrix(t1_test$deceased,t1_pred) # Accuracy 0.6448 (0.6401, 0.6496)
+```
+
+
+### 2 : 30 - 59 days {.tabset}
+```{r, cache=TRUE,eval=TRUE, include = TRUE}
+n = nrow(tier2_selected)
+ntrain = floor(0.7*n)
+ntest = floor(0.3*n)
+
+set.seed(1234)
+split = sample(rep(1:2, times=c(ntrain, ntest)))
+
+#split the data 
+t2_train = tier2_selected[split==1,] 
+t2_test = tier2_selected[split==2,] 
+
+dim(t2_train);dim(t2_test) #658 89 ; 282 89
+
+library(rpart)
+t2_rpart = rpart(t2_train$deceased ~ ., data = t2_train, method = "class", control = list(minsplit=20, minbucket = 7, cp=0))
+printcp(t2_rpart)
+t2_rpart$cptable[which.min(t2_rpart$cptable[,"xerror"])] #0.8235294
+t2_treepruned = prune(t2_rpart, cp=0.8235294)
+t2_varimp = round(summary(t2_treepruned)$variable.importance,2)
+```
+
+
+```{r,cache=TRUE,eval=TRUE, echo = FALSE}
+barplot(t2_varimp[1:10], col = "darkblue", horiz = TRUE, las=2, cex.names=0.5,main = "Var. Importance for Death Among Patients with Stay 30< days < 60")
+```
+For the outcome of decease for patients who stayed more than 30 days but less than 60 days again shows the most relation to the total amount of charges by hospital. It is followed by the regular hours of work-out, then zipcode of the hospital. 
+
+```{r,cache=TRUE,eval=FALSE,echo = FALSE}
+#fit on the testing set 
+t2_pred = predict(t2_treepruned, t2_test, type = "class")
+#data.frame(t2_test$deceased, t2_pred) 
+confusionMatrix(t2_test$deceased,t2_pred) # accuracy = 0.7305 (0.6747, 0.7814)
+```
+
+
+### 3 : 60 - 89 days {.tabset}
+```{r,cache=TRUE, echo = FALSE}
+n = nrow(tier3_selected)
+ntrain = floor(0.7*n);ntest = floor(0.3*n)
+set.seed(1234)
+split = sample(rep(1:2, times=c(ntrain, ntest)))
+
+#split the data 
+t3_train = tier3_selected[split==1,] 
+t3_test = tier3_selected[split==2,] 
+
+dim(t3_train);dim(t3_test) #84 89 ; 35 89
+
+library(rpart)
+t3_rpart = rpart(t3_train$deceased ~ ., data = t3_train, method = "class", control = list(minsplit=20, minbucket = 7, cp=0))
+printcp(t3_rpart)
+t3_rpart$cptable[which.min(t3_rpart$cptable[,"xerror"])] #0.9473684
+t3_treepruned = prune(t3_rpart, cp=0.9473684)
+t3_varimp = round(summary(t3_treepruned)$variable.importance,2)
+```
+
+
+```{r,cache=TRUE, echo = FALSE}
+
+barplot(t3_varimp[1:10], col = "darkblue", horiz = TRUE, las=2, cex.names=0.5,main = "Var. Importance for Death Among Patients with Stay 60 < days < 90")
+#fit on the testing set 
+t3_pred = predict(t3_treepruned, t3_test, type = "class")
+#data.frame(t3_test$deceased, t3_pred) 
+confusionMatrix(t3_test$deceased,t3_pred) # Accuracy 0.6857 (0.5071-0.8315)
+```
+From the length of stay longer than 60 days, the total hospital charges disappear completely. The amount of workout in hours dictated the decease outcome, which was followed by the facility zip code again. 
+
+### 4 : 90 - 149 days {.tabset}
+```{r,cache=TRUE, echo = FALSE}
+n = nrow(tier4_selected)
+ntrain = floor(0.7*n);ntest = floor(0.3*n)
+set.seed(1234)
+split = sample(rep(1:2, times=c(ntrain, ntest)))
+
+#split the data 
+t4_train = tier4_selected[split==1,] 
+t4_test = tier4_selected[split==2,] 
+
+dim(t4_train);dim(t4_test) # 36 89 ; 15 89
+
+library(rpart)
+t4_rpart = rpart(t4_train$deceased ~ ., data = t4_train, method = "class", control = list(minsplit=5, minbucket = 2, cp=0))
+printcp(t4_rpart)
+t4_rpart$cptable[which.min(t4_rpart$cptable[,"xerror"])] #0
+```
+
+
+```{r,cache=TRUE, echo = FALSE}
+
+t4_varimp = (summary(t4_rpart)$variable.importance) 
+
+barplot(t4_varimp[1:10], col = "darkblue", horiz = TRUE, las=2, cex.names=0.5,main = "Var. Importance for Death Among Patients with Stay 90 < days < 150")
+
+#fit on the testing set 
+t4_pred = predict(t4_rpart, t4_test, type = "class")
+#data.frame(t4_test$deceased, t4_pred) 
+confusionMatrix(t4_test$deceased,t4_pred) # accuracy 0.8 (0.5191 - 0.9567)
+summary(t4_rpart,cp=0.1)
+```
+It is interesting to observe that the facility zip code is found to be the most important factor for predicting the death of patients who stayed in the hospital more than 90 days.
+
+
+### 5 : No tree nodes were generated
+```{r,r,cache=TRUE, eval = FALSE}
+n = nrow(tier5_select4ed)
+ntrain = floor(0.7*n)
+ntest = floor(0.3*n)
+
+set.seed(1234)
+split = sample(rep(1:2, times=c(ntrain, ntest)))
+
+#split the data 
+t5_train = tier5_selected[split==1,] 
+t5_test = tier5_selected[split==2,] 
+
+dim(t5_train);dim(t5_test) #24 89 ;  11 89
+
+length(t5_train$deceased == 1) #24 : so all data are deceased. cannot divide!
+length(tier5_selected$deceased == 1) #35
+length(tier5_selected$deceased) #35
+
+#t5_rpart = rpart(t5_train$deceased ~ ., data = t5_train, method = "class", control = list(minsplit=1, minbucket = 1, cp=0.001))
+#printcp(t5_rpart)
+
+```
+
+The data for tier 5 patients who stayed longer than 150 days in hospital were not able to be analyzed as all outcomes were identified as deceased. 
+
+From the models developed and the performances from each tier are summarized below: 
+
+
+It was attempted to develop another prediction model to compare the model performances. However, the imputation of missing data were too extensive for the allocated memories and even with the complete cases for patients, the codes could not be completed running. At this point, the analysis proceeded with the recursive partition regression model developed above. 
+
+
+## {-}
+
+
+
+---------------------------------------------------
+
+
+# Variables selected by recursive partitioning then Elastic-Net Regression
+
+
+
+```{r,cache = TRUE, echo = FALSE, include = FALSE, eval=FALSE}
+## variable selection for each tier based on rpart outcome
+
+
+e1_data = tier1_selected %>% select(oralcntr_yrs, oralcntr_ever_q1, payer_plan_cde, payer_coverage_typ,diag_ccs_code1,facility_zip5_cde, allex_life_hrs, smoke_lifeexpo, age_at_baseline, total_charges_amt, bmi_q1, height_q1, hbpmed_totyrs, nsaid_totyrs, mammo_ever_q1, brca,deceased) 
+e1_data = e1_data %>% drop_na() 
+e1_data = sample_frac(e1_data, 0.1)
+
+
+
+e2_data = tier2_selected %>% select(diag_ccs_code1, study_start_date_q3, smoke_lifeexpo, facility_zip5_cde, allex_life_hrs, total_charges_amt, age_at_baseline, bmi_q1, height_q1, nsaid_totyrs, mammo_ever_q1, brca,deceased)
+e2_data = e2_data %>% drop_na()
+
+
+e3_data = tier3_selected %>% select(bmi_q1, weight_q1, study_start_date_q3, age_at_baseline, facility_zip5_cde, allex_life_hrs,deceased)
+e3_data = e3_data %>% drop_na()
+
+#tier4_selected and tier5_selected were combined, for patients who stayed more than 120 days. 
+e4_data = rbind(tier4_selected, tier5_selected)
+e4_data = e4_data %>% select(weight_q1, participant_race, height_q1, age_dad_atbirth, age_at_baseline, facility_zip5_cde,deceased, bmi_q1)
+e4_data = e4_data %>% drop_na()
+
+#dim(e1_data) # 32740 17
+#dim(e2_data) #818 13 
+#dim(e3_data) #112 7
+#dim(e4_data) # 81 7
+
+```
+
+
+```{r, cache = TRUE,echo = FALSE, include = FALSE, eval=FALSE}
+library(mlr)
+
+tsk1 = makeClassifTask(id = "enet reg death prediction", data = e1_data, target = "deceased")
+tsk2 = makeClassifTask(id = "enet reg death prediction", data = e2_data, target = "deceased")
+tsk3 = makeClassifTask(id = "enet reg death prediction", data = e3_data, target = "deceased")
+tsk4 = makeClassifTask(id = "enet reg death prediction", data = e4_data, target = "deceased")
+
+lnr = makeLearner("classif.cvglmnet", fix.factors.prediction = TRUE, predict.type = "prob", alpha = 0.5, type.measure = 'auc')
+```
+
+
+```{r,cache = TRUE, echo = FALSE, eval = FALSE}
+#enet 1
+set.seed(1234)
+
+holdout_desc = makeResampleDesc(method = 'Holdout', stratify = TRUE)
+hold = makeResampleInstance (holdout_desc, task = tsk1, split = 0.7)
+train = hold$train.inds[[1]]; test = hold$test.inds[[1]]
+
+enet1 = train(learner = lnr, task = tsk1, subset = train)
+cv_auc1 = max(enet1$learner.model$cvm);cv_auc1 #0.6736585
+l.min1 = enet1$learner.model$lambda.min; l.min1 #0.005771661
+enet1.min.lnr = makeLearner("classif.glmnet", lambda = l.min1, fix.factors.prediction = FALSE, predict.type = "prob", alpha = 0.5)
+enet1.min = train(learner = enet1.min.lnr, task = tsk1, subset = train)
+enet1.pred = predict(enet1.min, task = tsk1, subset = test)
+enet1.pred
+
+auc1 = performance(enet1.pred); mmce# 0.4975261 
+
+
+
+```
+
+
+Elastic net regression iteration was successfully completed with the tier 1, with cv AUC = 0.6736, and misclassification error with 0.4975. 
+
+```{r, cache = TRUE, echo = FALSE, eval = FALSE}
+#enet 2
+set.seed(1234)
+
+holdout_desc = makeResampleDesc(method = 'Holdout', stratify = TRUE)
+hold = makeResampleInstance (holdout_desc, task = tsk2, split = 0.7)
+train = hold$train.inds[[1]]; test = hold$test.inds[[1]]
+
+enet2 = train(learner = lnr, task = tsk2, subset = train)
+cv_auc2 = max(enet2$learner.model$cvm);cv_auc2 #0.8740608 # 0.67365852
+l.min2 = enet2$learner.model$lambda.min; l.min2 #0.00446303
+enet2.min.lnr = makeLearner("classif.glmnet", lambda = l.min2, fix.factors.prediction = FALSE, predict.type = "prob", alpha = 0.5)
+enet2.min = train(learner = enet2.min.lnr, task = tsk2, subset = train)
+enet2.pred = predict(enet2.min, task = tsk2, subset = test)
+enet2.pred
+auc2 = performance(enet2.pred, measures = auc); auc2 #0.6406513
+
+
+enet2.total = predict(enet2.min, task = tsk2)
+auc2.t = performance(enet2.total, measures = auc ); auc2.t #0.8952991
+
+
+df = generateThreshVsPerfData(list(test = enet2.pred, total = enet2.total), measures = list(fpr, tpr, mmce))
+plotROCCurves(df)
+
+
+
+```
+Elastic net regression iteration was succesfully completed with tier 2, with cv AUC = 0.8953.
+ROC curves were plotted to visualize the AUC, but it was omitted to evaluate in this report due to the extended iteration time(>3 hrs).
+
+```{r,echo = FALSE , cache = TRUE, eval = FALSE}
+#enet 3
+set.seed(1234)
+
+holdout_desc = makeResampleDesc(method = 'Holdout', stratify = TRUE)
+hold = makeResampleInstance (holdout_desc, task = tsk3, split = 0.5)
+train = hold$train.inds[[1]]; test = hold$test.inds[[1]]
+tsk3
+dim(tsk3)
+
+enet3 = train(learner = lnr, task = tsk3, subset = train)
+cv_auc3 = max(enet3$learner.model$cvm);cv_auc3 #0.6736585
+l.min3 = enet3$learner.model$lambda.min; l.min3 #0.00446303
+enet3.min.lnr = makeLearner("classif.glmnet", lambda = l.min3, fix.factors.prediction = FALSE, predict.type = "prob", alpha = 0.5)
+enet3.min = train(learner = enet3.min.lnr, task = tsk3, subset = train)
+enet3.pred = predict(enet3.min, task = tsk3, subset = test)
+
+enet3.pred
+performance(enet3.pred) #mmce 0.2368421
+
+
+
+
+```
+
+
+Elastic net regression was successfully completed with tier 3, with misclassification error or 0.2368. 
+
+```{r, cache = TRUE,echo=FALSE, eval = FALSE}
+#enet 4
+set.seed(1234)
+
+holdout_desc = makeResampleDesc(method = 'Holdout', stratify = TRUE)
+hold = makeResampleInstance (holdout_desc, task = tsk4, split = 0.5)
+train = hold$train.inds[[1]]; test = hold$test.inds[[1]]
+tsk4
+dim(tsk4)
+
+enet4 = train(learner = lnr, task = tsk4, subset = train)
+cv_auc4 = max(enet4$learner.model$cvm);cv_auc4 #0.6736585
+l.min4 = enet4$learner.model$lambda.min; l.min4 #0.00446303
+enet4.min.lnr = makeLearner("classif.glmnet", lambda = l.min4, fix.factors.prediction = FALSE , predict.type = "prob", alpha = 0.5)
+enet4.min = train(learner = enet4.min.lnr, task = tsk4, subset = train)
+enet4.pred = predict(enet3.min, task = tsk4)
+
+enet4.pred
+
+
+
+
+```
+
+
+
+
+---------------------------------------------------
+
+# Comorbidities Analysis
+
+In order to understand the effect of comorbidities on deceased rate, a new variable with presence of secondary, tertiary, quarternary and quinary ccs codes was created. 
+
+Spearman's rank correlation coefficient as known as Spearman's rho statistics is used to estimate a rank-based measure association, for the data that does not have bivariate normal distribution.
+
+new feature creation with comorbidities, entire dataset
+
+
+
+
+
+## EDA Tables for Comorbidity Analysis {.tabset}
+
+
+
+
+
+### EDA for Diagnoses Distributions for Deceased {.tabset}
+```{r, cache = TRUE,echo=FALSE, include = FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+ccsdat = combined_data
+
+c1 = ccsdat %>% filter (ccsdat$deceased == 1) %>% select(deceased, diag_ccs_code1, diag_ccs1)%>% group_by(diag_ccs1) %>% summarise(counts=n())
+c1
+ccsdat %>% filter (diag_ccs_code1 == 122) %>% select(diag_ccs_code1, diag_ccs1)
+
+#0
+#
+
+#,108,109,122,159,203,226,254
+c1 = as.data.frame(c1)
+c1= top_n(c1, 10)
+
+
+```
+
+
+```{r, cache = TRUE,echo=FALSE}
+c1
+cg1 = ggplot(c1, aes(x= reorder(diag_ccs1, counts), y = counts))+
+  geom_bar(stat = 'identity', width = 0.8, color = "black", fill = "darkcyan")+
+  xlab ("Primary diagnosis for admitted patients")+
+  ylab("frequencies") +
+  ggtitle ("Top 10 Primary Diagnosis among Deceased")
+cg1 + theme(axis.text.x = element_text(angle = 25,hjust=1)) # top : 2 Septicemia (except in labor), 108 (Congestive heart failure; nonhypertensive), 122 Pneumonia
+
+```
+
+then, make new var for comorbidities for best 3 CCS code (primary diagnosis during that hospital visits, which collapses ICD codes into the broader group). 
+
+
+
+
+
+### Secondary diagnosis among deceased septicemia {.tabset}
+```{r, cache = TRUE,echo=FALSE,include = FALSE}
+dat = combined_data
+best1 = dat %>% select(deceased, diag_ccs_code1, diag_ccs_code2, diag_ccs_code3, diag_ccs2, diag_ccs3) %>% filter(diag_ccs_code1 == 2)
+best1.1 = best1 %>% drop_na(deceased, diag_ccs_code1)
+best1.1 = best1 %>% filter (best1$deceased == 1) %>% select(deceased, diag_ccs_code2, diag_ccs2)%>% group_by(diag_ccs2) %>% summarise(counts=n())
+best1.1
+
+
+#,108,109,122,159,203,226,254
+best1.1 = as.data.frame(best1.1)
+best1.1= top_n(best1.1, 5)
+```
+
+
+```{r, cache = TRUE,echo=FALSE}
+best1.1
+b1 = ggplot(best1.1, aes(x= reorder(diag_ccs2, counts), y = counts))+
+  geom_bar(stat = 'identity', width = 0.8, color = "black", fill = "coral3")+
+  xlab ("Primary diagnosis for admitted patients")+
+  ylab("frequencies") +
+  ggtitle ("Secondary Diagnosis among deceased people with #Septicemia (except in labor)")
+b1 + theme(axis.text.x = element_text(angle = 25,hjust=1)) # top : 2 Septicemia (except in labor), 108 (Congestive heart failure; nonhypertensive), 122 Pneumonia
+
+
+```
+
+
+
+
+
+### Secondary diagnosis among deceased CHF {.tabset}
+```{r, cache = TRUE,echo=FALSE, include = FALSE}
+dat = combined_data
+best2 = dat %>% select(deceased, diag_ccs_code1, diag_ccs_code2, diag_ccs_code3, diag_ccs2, diag_ccs3) %>% filter(diag_ccs_code1 == 108)
+best2 = best2 %>% drop_na(deceased, diag_ccs_code2)
+best2 = best2 %>% filter (best2$deceased == 1) %>% select(deceased, diag_ccs_code2, diag_ccs2)%>% group_by(diag_ccs2) %>% summarise(counts=n())
+```
+
+
+```{r, cache = TRUE,echo=FALSE}
+
+
+#,108,109,122,159,203,226,254
+best2 = as.data.frame(best2)
+best2= top_n(best2, 5)
+best2
+b2 = ggplot(best2, aes(x= reorder(diag_ccs2, counts), y = counts))+
+  geom_bar(stat = 'identity', width = 0.8, color = "black", fill = "chocolate")+
+  xlab ("Primary diagnosis for admitted patients")+
+  ylab("frequencies") +
+  ggtitle ("Secondary Diagnosis among deceased people with #Congestive Heart Failure")
+b2 + theme(axis.text.x = element_text(angle = 25,hjust=1)) # top : 2 Septicemia (except in labor), 108 (Congestive heart failure; nonhypertensive), 122 Pneumonia
+
+
+```
+
+
+
+
+
+### Secondary diagnosis among deceased pneumonia {.tabset}
+```{r, cache = TRUE,echo=FALSE,include = FALSE}
+dat = combined_data
+best3 = dat %>% select(deceased, diag_ccs_code1, diag_ccs_code2, diag_ccs_code3, diag_ccs2, diag_ccs3) %>% filter(diag_ccs_code1 == 122)
+best3 = best3 %>% drop_na(deceased, diag_ccs_code3)
+best3 = best3 %>% filter (best3$deceased == 1) %>% select(deceased, diag_ccs_code2, diag_ccs2)%>% group_by(diag_ccs2) %>% summarise(counts=n())
+```
+
+
+```{r, cache = TRUE,echo=FALSE}
+
+
+
+#,108,109,122,159,203,226,254
+best3 = as.data.frame(best3)
+best3= top_n(best3, 5)
+best3
+b3 = ggplot(best2, aes(x= reorder(diag_ccs2, counts), y = counts))+
+  geom_bar(stat = 'identity', width = 0.8, color = "black", fill = "goldenrod3")+
+  xlab ("Primary diagnosis for admitted patients")+
+  ylab("frequencies") +
+  ggtitle ("Secondary Diagnosis among deceased people with #Pneumonia")
+b3 + theme(axis.text.x = element_text(angle = 20,hjust=1)) # top : 2 Septicemia (except in labor), 108 (Congestive heart failure; nonhypertensive), 122 Pneumonia
+
+
+```
+
+
+## {-}
+
+
+The Charlson Comorbidity Index estimates the survival in patients with multiple comorbidities which consists of different items. Following the publicly available Charlson Comorbidity Index categories, each diagnosis was scored.  
+```{r, echo = FALSE, include = FALSE, cache = TRUE}
+
+library(knitr)
+
+cc = read.csv("S:/Researcher Projects/Self Service Analysis Projects/10017_USCDAT/Suyeon Ryu/comorbidity.csv",header =TRUE)
+cc_kable = knitr::kable(cc, caption = "COH Charlson Comorbidity Index with Scores", "simple", align="cc")
+cc_kable
+
+```
+
+
+
+
+
+
+```{r, cache = TRUE, echo=FALSE}
+
+
+ccs = dat %>% select(deceased, diag_ccs_code1, diag_ccs_code2, diag_ccs_code3, diag_ccs_code4, diag_ccs_code5)
+ccs = drop_na(ccs)
+
+com.total = read.csv("S:/Researcher Projects/Self Service Analysis Projects/10017_USCDAT/Suyeon Ryu/prim_comorbidity.csv",header =TRUE)
+com.ex=head(com.total)
+
+ct_kable = knitr::kable(com.ex, caption = "Example : COH Charlson Comorbidity Index with Scores", "simple", align="cc"); ct_kable
+com.score = com.total %>% select(deceased, com.score)
+
+com.o = com.score[order(com.score$deceased, decreasing = TRUE),]
+cor = cor.test(com.o$deceased, com.o$com.score, method = c("pearson","kendall","spearman")) # 0.106674
+cor
+
+
+#univariate analysis 
+x = glm(com.o$deceased ~ com.o$com.score, family = binomial(link = "logit"))
+summary(x)
+exp(coef(x))
+
+or = exp(cbind(OR=coef(x),confint(x))); round(or, digits=4)
+
+```
+
+
+From the univariate analysis with deceased outcome with the COH Charlson comorbidities, per 1 unit of increase in comorbidity index is associated with deceased outcome at the odds of 1.2490. 
+
+
+logit(1) = (0.87737 + 0.22241 * comorbidity score of 1) = OR of 3.00
+logit(5) = e^(.87737+0.22241 * comorbidity score of 5) =  OR of 7.311
+
+
+
+
+
+
+
+
+
+---------------------------------------------------
+
+
+# Spatial Pattern Visualization  
+
+Due to the significance of the spatial information in relation to the mortality rates, Provided zip code information of patients' residential area and publicly available socioeconomic status were paired to assess the spatial relations with the patients mortality rates. 
+
+
+
+```{r, cache=TRUE, echo=FALSE}
+obj4= dat %>% select(deceased, facility_zip5_cde, admission_dt)
+obj4 = na.omit(obj4) ; #dim(obj4) #132538 3
+
+a = (obj4%>% count(facility_zip5_cde, deceased, sort=TRUE))
+a = a %>% group_by(facility_zip5_cde) %>% 
+  mutate(countT=sum(n))
+a = a%>% group_by(facility_zip5_cde) %>% mutate(rate = n/countT)
+b = as.data.frame(a %>% filter(deceased==1)) #412 5
+
+library(ggplot2)
+library(dplyr)
+library(maps)
+library(zipcodeR)
+data("zip_code_db")
+latlng = zip_code_db %>% select(zipcode, lat, lng, median_household_income)
+
+mergedf = merge(b,latlng,by.x = "facility_zip5_cde", by.y = "zipcode", all.x = TRUE, all.y = FALSE) 
+
+
+us = map_data("state")
+us = subset(map_data("state"), region =="california")
+
+ggplot()+
+geom_polygon(data = us, aes(x = long, y = lat, group = group ), fill="white",color = "black",alpha = 0.3)+
+  geom_point(data = mergedf, aes(x = lng, y= lat, alpha = facility_zip5_cde, size = median_household_income, color = rate), shape = 20,stroke=TRUE)+
+  ggtitle("The Decease Rate for All Admitted Patients Depending on ZipCodes")+
+  theme(
+      legend.position = c(1, 0.8),
+      text = element_text(color = "#22211d"),
+      plot.background = element_rect(fill = "#f5f5f2", color=NA),
+      panel.background = element_rect(fill = "#f5f5f2", color = NA),
+      legend.background = element_rect(fill = "#f5f5f2", color=NA), 
+      plot.title = element_text(size = 12, hjust=0.1, color = "#4e4d47", margin = margin(b = -0.1, t = 0.4, l = 2))
+  )
+
+
+
+
+```
+--------------------------------------------------------------------------------
+## Spatial Deceased Rates Visualization {.tabset}
+
+
+
+### Tier 1 {.tabset}
+```{r, cache = TRUE, echo = FALSE}
+obj4.1= tier1 %>% select(deceased, facility_zip5_cde, admission_dt)
+obj4.1 = na.omit(obj4.1) ; #dim(obj4) #132538 3
+
+a = (obj4.1%>% count(facility_zip5_cde, deceased, sort=TRUE))
+a = a %>% group_by(facility_zip5_cde) %>% 
+  mutate(countT=sum(n))
+a = a%>% group_by(facility_zip5_cde) %>% mutate(rate = n/countT)
+b = as.data.frame(a %>% filter(deceased==1)) #412 5
+
+mergedf = merge(b,latlng,by.x = "facility_zip5_cde", by.y = "zipcode", all.x = TRUE, all.y = FALSE) 
+
+
+ggplot()+
+geom_polygon(data = us, aes(x = long, y = lat, group = group ), fill="white",color = "black",alpha = 0.3)+
+  geom_point(data = mergedf, aes(x = lng, y= lat, size = median_household_income, color = rate),stroke=TRUE)+
+  ggtitle("The Decease Rate for <30 Days Stay Patients with SES Neighborhood")+
+  theme(
+      legend.position = c(1, 0.8),
+      text = element_text(color = "#22211d"),
+      plot.background = element_rect(fill = "#f5f5f2", color=NA),
+      panel.background = element_rect(fill = "#f5f5f2", color = NA),
+      legend.background = element_rect(fill = "#f5f5f2", color=NA), 
+      plot.title = element_text(size = 12, hjust=0.1, color = "#4e4d47", margin = margin(b = -0.1, t = 0.4, l = 2))
+  )
+
+
+```
+
+
+
+
+### Tier 2 {.tabset}
+```{r, cache = TRUE ,echo = FALSE}
+obj4.2= tier2 %>% select(deceased, facility_zip5_cde, admission_dt)
+obj4.2 = na.omit(obj4.2) ; #dim(obj4) #132538 3
+
+a = (obj4.2%>% count(facility_zip5_cde, deceased, sort=TRUE))
+a = a %>% group_by(facility_zip5_cde) %>% 
+  mutate(countT=sum(n))
+a = a%>% group_by(facility_zip5_cde) %>% mutate(rate = n/countT)
+b = as.data.frame(a %>% filter(deceased==1)) #412 5
+
+mergedf = merge(b,latlng,by.x = "facility_zip5_cde", by.y = "zipcode", all.x = TRUE, all.y = FALSE) 
+
+
+ggplot()+
+geom_polygon(data = us, aes(x = long, y = lat, group = group ), fill="white",color = "black",alpha = 0.3)+
+  geom_point(data = mergedf, aes(x = lng, y= lat, size = median_household_income, color = rate),stroke=TRUE)+
+  ggtitle("The Decease Rate for 30< Days <60 Stay Patients with SES neighborhood")+
+  theme(
+      legend.position = c(1, 0.8),
+      text = element_text(color = "#22211d"),
+      plot.background = element_rect(fill = "#f5f5f2", color=NA),
+      panel.background = element_rect(fill = "#f5f5f2", color = NA),
+      legend.background = element_rect(fill = "#f5f5f2", color=NA), 
+      plot.title = element_text(size = 12, hjust=0.1, color = "#4e4d47", margin = margin(b = -0.1, t = 0.4, l = 2))
+  )
+
+
+
+
+```
+
+
+### Tier 3{.tabset}
+```{r, cache = TRUE ,echo = FALSE}
+obj4.3= tier3 %>% select(deceased, facility_zip5_cde, admission_dt)
+obj4.3 = na.omit(obj4.3) ; #dim(obj4) #132538 3
+
+a = (obj4.3%>% count(facility_zip5_cde, deceased, sort=TRUE))
+a = a %>% group_by(facility_zip5_cde) %>% 
+  mutate(countT=sum(n))
+a = a%>% group_by(facility_zip5_cde) %>% mutate(rate = n/countT)
+b = as.data.frame(a %>% filter(deceased==1)) #412 5
+
+
+mergedf = merge(b,latlng,by.x = "facility_zip5_cde", by.y = "zipcode", all.x = TRUE, all.y = FALSE) 
+
+
+ggplot()+
+geom_polygon(data = us, aes(x = long, y = lat, group = group ), fill="white",color = "black",alpha = 0.3)+
+  geom_point(data = mergedf, aes(x = lng, y= lat, size = median_household_income, color = rate),stroke=TRUE)+
+  ggtitle("The Decease Rate for 60< Days < 90 Stay Patients with SES background")+
+  theme(
+      legend.position = c(1, 0.8),
+      text = element_text(color = "#22211d"),
+      plot.background = element_rect(fill = "#f5f5f2", color=NA),
+      panel.background = element_rect(fill = "#f5f5f2", color = NA),
+      legend.background = element_rect(fill = "#f5f5f2", color=NA), 
+      plot.title = element_text(size = 12, hjust=0.1, color = "#4e4d47", margin = margin(b = -0.1, t = 0.4, l = 2))
+  )
+
+
+```
+
+### Tier 4{.tabset}
+```{r, cache = TRUE, echo = FALSE}
+obj4.4= tier4 %>% select(deceased, facility_zip5_cde, admission_dt)
+obj4.4 = na.omit(obj4.4) ; #dim(obj4) #132538 3
+
+a = (obj4.4%>% count(facility_zip5_cde, deceased, sort=TRUE))
+a = a %>% group_by(facility_zip5_cde) %>% 
+  mutate(countT=sum(n))
+a = a%>% group_by(facility_zip5_cde) %>% mutate(rate = n/countT)
+b = as.data.frame(a %>% filter(deceased==1)) #412 5
+
+
+mergedf = merge(b,latlng,by.x = "facility_zip5_cde", by.y = "zipcode", all.x = TRUE, all.y = FALSE) 
+
+
+ggplot()+
+geom_polygon(data = us, aes(x = long, y = lat, group = group ), fill="white",color = "black",alpha = 0.3)+
+  geom_point(data = mergedf, aes(x = lng, y= lat, size = median_household_income, color = rate),stroke=TRUE)+
+  ggtitle("The Decease Rate for 90< Days <150 Stay Patients")+
+  theme(
+      legend.position = c(1, 0.8),
+      text = element_text(color = "#22211d"),
+      plot.background = element_rect(fill = "#f5f5f2", color=NA),
+      panel.background = element_rect(fill = "#f5f5f2", color = NA),
+      legend.background = element_rect(fill = "#f5f5f2", color=NA), 
+      plot.title = element_text(size = 12, hjust=0.1, color = "#4e4d47", margin = margin(b = -0.1, t = 0.4, l = 2))
+  )
+
+```
+
+### Tier 5{.tabset}
+
+```{r, cache = TRUE, echo = FALSE}
+obj4.5= tier5 %>% select(deceased, facility_zip5_cde, admission_dt)
+obj4.5 = na.omit(obj4.5) ; #dim(obj4) #132538 3
+
+a = (obj4.5%>% count(facility_zip5_cde, deceased, sort=TRUE))
+a = a %>% group_by(facility_zip5_cde) %>% 
+  mutate(countT=sum(n))
+a = a%>% group_by(facility_zip5_cde) %>% mutate(rate = n/countT)
+b = as.data.frame(a %>% filter(deceased==1)) #412 5
+
+mergedf = merge(b,latlng,by.x = "facility_zip5_cde", by.y = "zipcode", all.x = TRUE, all.y = FALSE) 
+
+
+ggplot()+
+geom_polygon(data = us, aes(x = long, y = lat, group = group ), fill="white",color = "black",alpha = 0.3)+
+  geom_point(data = mergedf, aes(x = lng, y= lat, size = median_household_income, color = rate),stroke=TRUE)+
+  ggtitle("The Decease Rate for >150 Days Stay Patients")+
+  theme(
+      legend.position = c(1, 0.8),
+      text = element_text(color = "#22211d"),
+      plot.background = element_rect(fill = "#f5f5f2", color=NA),
+      panel.background = element_rect(fill = "#f5f5f2", color = NA),
+      legend.background = element_rect(fill = "#f5f5f2", color=NA), 
+      plot.title = element_text(size = 12, hjust=0.1, color = "#4e4d47", margin = margin(b = -0.1, t = 0.4, l = 2))
+  )
+
+```
+
+## {-}
+
+
+```{r, cache=TRUE,include = FALSE}
+dim(combined_data)#132538 164
+dat = combined_data
+length(dat$deceased) #132538
+y = dat$deceased
+unique(y) #0 1
+
+```
+
+
+
+
+```{r, cache=TRUE, include = FALSE}
+#select only the patients who were deceased
+length(y[which(y==1)]) #68439
+comb_data = combined_data[combined_data$deceased=="1",]
+dim(comb_data) #68439 154
+
+#features manually selected 
+die_feat = read.csv("S:/Researcher Projects/Self Service Analysis Projects/10017_USCDAT/Suyeon Ryu/combined_data_deathonly_features.csv",header = TRUE)
+dim(die_feat) #68439 102
+```
+
+
+
+----------------------------------------------------------
+
+## Conclusion 
+
+Patients information by COH from 2000 to 2015 were analyzed to predict and to define any patterns for the deceased outcome. Based on the stratified length of stay since admission to the hospital to the outcome, recursive partitioning regression methods were used to develop prediction models per each tier with training set (70%), then each model's performances were evaluated with the testing set(30%). Although it was not feasible in this particular setting, it is highly desired for different types of machine learning models to be developed then compared in terms of the performances, to pick out the best models. 
+
+The tiers for length of hospital stay were divided as 30, 60, 90, 150, and 150+ days. For the first tier and second tier, the total amount of the hospital charges were dominating to predict the death of the patients. It may be related to the urgency of the medical care needs which followed by the multiple costly testings, or may be related to the government supports period for patients care. The insurance tier was also included in the variables, but it was not singled out for a significant variable to be considered to predict the death of patients. 
+
+From tier 1 through tier 4, the hospital zip code was prevalently appeared as one of the most important variables to predict the death outcome of patients. The longer the length of the stay, the higher it ranked as an important factor. To define further about this, the spatial map with the death rate of the patients relative to the socioeconomic status for neighborhood were built for each tier. The increasing death rate as the tier increases was apparent, and death outcome seem to be more prevalent in large cities such as Los Angeles and San Francisco. The relation to the socioeconomic status was not too apparent based on the spatial map created, and further analysis will be required to define more details. 
+
+The comorbidities were assessed from the publicly known Charlson Comorbidity Index (CCI), with fltered data sets for the observations with full diagnoses primary to quinary. Once each observation's CCI was obtained, logistic calculations with the deceased outcome is completed. From the univariate analysis with deceased outcome with the COH Charlson comorbidities, per 1 unit of increase in comorbidity index is associated with deceased outcome at the odds of 1.2490. 
+
+The future direction of the report would be analyzing not just spatial but also temporal assessments in predicting death outcome of patients. Also, finding out the effect of co-morbities towards the patients' death will be a great source to further understandings. 
